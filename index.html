@@ -1,0 +1,1053 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>商品期权偏度套利监控</title>
+<script src="./echarts.min.js"></script>
+<style>
+/* ── OpenVlab 极简白底风格 ── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif;
+  background: #FFFFFF; color: #2C3E50; font-size: 13px; line-height: 1.5;
+}
+a { color: #3498DB; text-decoration: none; }
+
+/* ── 状态栏 ── */
+.status-bar {
+  display: flex; align-items: center; gap: 20px; padding: 8px 16px;
+  background: #FAFAFA; border-bottom: 1px solid #E0E0E0; font-size: 12px;
+  position: sticky; top: 0; z-index: 100;
+}
+.status-bar .dot {
+  width: 8px; height: 8px; border-radius: 0; display: inline-block; margin-right: 4px;
+}
+.dot.green { background: #27AE60; }
+.dot.yellow { background: #F39C12; }
+.dot.red { background: #E74C3C; }
+.status-item { display: flex; align-items: center; gap: 4px; }
+.status-divider { width: 1px; height: 16px; background: #E0E0E0; }
+.btn {
+  padding: 4px 12px; border: 1px solid #BDC3C7; background: #FFFFFF; color: #2C3E50;
+  cursor: pointer; font-size: 12px; font-family: inherit; border-radius: 0;
+}
+.btn:hover { background: #EBF5FB; border-color: #3498DB; }
+.btn-primary { background: #3498DB; color: #fff; border-color: #3498DB; }
+.btn-primary:hover { background: #2980B9; }
+.btn-sm { padding: 2px 8px; font-size: 11px; }
+.signal-count { font-weight: 700; font-size: 14px; }
+.signal-count.active { color: #E74C3C; animation: blink 1s infinite; }
+@keyframes blink { 0%,100%{opacity:1;} 50%{opacity:0.4;} }
+.delay-tag { background: #FFF3CD; color: #856404; padding: 1px 6px; font-size: 11px; border: 1px solid #FFEEBA; }
+
+/* ── 筛选栏 ── */
+.filter-bar {
+  display: flex; align-items: center; gap: 12px; padding: 8px 16px;
+  border-bottom: 1px solid #E0E0E0; flex-wrap: wrap;
+}
+.filter-bar label { font-size: 12px; color: #7F8C8D; white-space: nowrap; }
+.filter-bar select, .filter-bar input[type="range"] { font-size: 12px; border: 1px solid #E0E0E0; padding: 2px 6px; }
+.filter-bar input[type="range"] { width: 100px; }
+
+/* ── 主表格 ── */
+.table-container { padding: 0 16px; overflow-x: auto; }
+table.main-table {
+  width: 100%; border-collapse: collapse; font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+table.main-table th {
+  background: #F5F6FA; color: #7F8C8D; font-weight: 600; padding: 8px 6px;
+  text-align: left; border-bottom: 2px solid #E0E0E0; cursor: pointer;
+  white-space: nowrap;
+}
+table.main-table th:hover { color: #2C3E50; }
+table.main-table th .sort-arrow { margin-left: 2px; font-size: 10px; }
+table.main-table td {
+  padding: 6px; border-bottom: 1px solid #F0F0F0; white-space: nowrap;
+}
+table.main-table tr:hover { background: #EBF5FB; }
+table.main-table tr.row-red { background: #FDEDEC; }
+table.main-table tr.row-green { background: #E8F8F5; }
+table.main-table tr.row-gray { background: #F8F9FA; color: #BDC3C7; }
+table.main-table tr.row-active { cursor: pointer; }
+.val-bold { font-weight: 700; }
+.val-red { color: #E74C3C; }
+.val-green { color: #27AE60; }
+.val-yellow { color: #F39C12; }
+.val-gray { color: #BDC3C7; }
+
+.tag {
+  display: inline-block; padding: 1px 5px; font-size: 10px; border: 1px solid;
+  white-space: nowrap;
+}
+.tag-green { background: #D5F5E3; color: #1E8449; border-color: #A9DFBF; }
+.tag-red { background: #FADBD8; color: #C0392B; border-color: #F5B7B1; }
+.tag-yellow { background: #FCF3CF; color: #7D6608; border-color: #F9E79F; }
+.tag-blue { background: #D6EAF8; color: #2471A3; border-color: #AED6F1; }
+.tag-gray { background: #F2F3F4; color: #7F8C8D; border-color: #E5E7E9; }
+.tag-recommend { font-weight: 700; font-size: 13px; }
+
+.arrow-up { color: #E74C3C; }
+.arrow-down { color: #27AE60; }
+
+/* ── 侧滑面板 ── */
+.overlay { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.3); z-index: 200; }
+.overlay.open { display: block; }
+.slide-panel {
+  position: fixed; top: 0; right: -880px; width: 880px; height: 100%;
+  background: #FFFFFF; box-shadow: -4px 0 20px rgba(0,0,0,0.15);
+  transition: right 0.25s ease; z-index: 201; overflow-y: auto;
+  display: flex; flex-direction: column;
+}
+.slide-panel.open { right: 0; }
+.panel-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 12px 16px; border-bottom: 1px solid #E0E0E0;
+  background: #FAFAFA; position: sticky; top: 0; z-index: 2;
+}
+.panel-header h3 { font-size: 15px; font-weight: 600; }
+.panel-close {
+  background: none; border: none; font-size: 20px; cursor: pointer;
+  color: #7F8C8D; padding: 4px 8px;
+}
+.panel-close:hover { color: #E74C3C; }
+.panel-body { padding: 16px; flex: 1; overflow-y: auto; }
+
+/* ── 指标卡 ── */
+.metric-cards {
+  display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px;
+  margin-bottom: 16px;
+}
+.metric-card {
+  padding: 10px 12px; border: 1px solid #E0E0E0; background: #FAFAFA;
+}
+.metric-card .label { font-size: 11px; color: #7F8C8D; margin-bottom: 2px; }
+.metric-card .value { font-size: 18px; font-weight: 700; }
+.metric-card.sub { font-size: 11px; color: #95A5A6; }
+.metric-card.blink-red { animation: blink 1s infinite; background: #FDEDEC; border-color: #E74C3C; }
+.metric-card.blink-green { animation: blink 1s infinite; background: #E8F8F5; border-color: #27AE60; }
+
+/* ── 期权链 + 图表区 ── */
+.chain-chart-row { display: flex; gap: 12px; margin-bottom: 16px; }
+.option-chain { flex: 0 0 420px; overflow-x: auto; }
+.option-chain table { width: 100%; border-collapse: collapse; font-size: 11px; font-variant-numeric: tabular-nums; }
+.option-chain th { background: #F5F6FA; color: #7F8C8D; font-weight: 600; padding: 4px; text-align: center; border-bottom: 2px solid #E0E0E0; }
+.option-chain td { padding: 2px 4px; text-align: center; border-bottom: 1px solid #F0F0F0; }
+.option-chain .strike-col { background: #FAFAFA; font-weight: 700; font-size: 12px; min-width: 70px; border-left: 1px solid #E0E0E0; border-right: 1px solid #E0E0E0; }
+.option-chain .row-benchmark { background: #FFF9E6; }
+.option-chain .row-benchmark td.strike-col { background: #FFF3CD; }
+.option-chain .tag-benchmark { font-size: 9px; color: #B7950B; display: block; }
+.chart-area { flex: 1; min-width: 350px; }
+
+.chart-tabs { display: flex; gap: 0; margin-bottom: 8px; border-bottom: 2px solid #E0E0E0; }
+.chart-tab {
+  padding: 6px 16px; font-size: 12px; cursor: pointer; border: none; background: none;
+  color: #7F8C8D; font-family: inherit; border-bottom: 2px solid transparent; margin-bottom: -2px;
+}
+.chart-tab.active { color: #2C3E50; border-bottom-color: #3498DB; font-weight: 600; }
+.chart-container { width: 100%; height: 350px; }
+.lot-selector { display: flex; gap: 4px; margin-bottom: 4px; }
+.lot-btn {
+  padding: 2px 10px; font-size: 11px; border: 1px solid #E0E0E0; background: #fff;
+  cursor: pointer; font-family: inherit;
+}
+.lot-btn.active { background: #3498DB; color: #fff; border-color: #3498DB; }
+
+/* ── 策略详情 ── */
+.detail-section { margin-bottom: 12px; }
+.detail-section h4 { font-size: 13px; font-weight: 600; margin-bottom: 6px; color: #2C3E50; }
+.detail-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.detail-table th { background: #F5F6FA; color: #7F8C8D; padding: 4px 8px; text-align: left; border-bottom: 1px solid #E0E0E0; }
+.detail-table td { padding: 4px 8px; border-bottom: 1px solid #F0F0F0; }
+
+/* ── 底部 ── */
+.footer-bar {
+  padding: 10px 16px; text-align: center; font-size: 11px; color: #BDC3C7;
+  border-top: 1px solid #E0E0E0; background: #FAFAFA;
+}
+
+/* ── 加载蒙层 ── */
+.loading-overlay {
+  display: flex; align-items: center; justify-content: center; gap: 8px;
+  padding: 40px; color: #7F8C8D; font-size: 14px;
+}
+.loading-spinner {
+  width: 20px; height: 20px; border: 2px solid #E0E0E0;
+  border-top-color: #3498DB; animation: spin 0.6s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ── 响应式 ── */
+@media (max-width: 1200px) {
+  .slide-panel { width: 100%; right: -100%; }
+  .chain-chart-row { flex-direction: column; }
+  .option-chain { flex: none; }
+}
+</style>
+</head>
+<body>
+
+<!-- ── 状态栏 ── -->
+<div class="status-bar" id="statusBar">
+  <div class="status-item">
+    <span class="dot yellow" id="statusDot"></span>
+    <span id="statusText">初始化中...</span>
+  </div>
+  <div class="status-divider"></div>
+  <div class="status-item">
+    <span>刷新: </span><span id="lastRefresh">--</span>
+  </div>
+  <div class="status-divider"></div>
+  <div class="status-item">
+    <span class="delay-tag" id="delayTag">延时约15分钟</span>
+  </div>
+  <div class="status-divider"></div>
+  <div class="status-item">
+    <span>品种: </span><strong id="totalProducts">0</strong>
+  </div>
+  <div class="status-divider"></div>
+  <div class="status-item">
+    <span>达标: </span><span class="signal-count" id="signalCount">0</span>
+  </div>
+  <div class="status-divider"></div>
+  <button class="btn btn-primary btn-sm" onclick="manualRefresh()">立即刷新</button>
+  <button class="btn btn-sm" id="soundBtn" onclick="toggleSound()">🔊 声音提醒</button>
+  <span style="margin-left:auto;font-size:11px;color:#BDC3C7;" id="currentTime"></span>
+</div>
+
+<!-- ── 筛选栏 ── -->
+<div class="filter-bar" id="filterBar">
+  <label>品种:</label>
+  <select id="filterProduct" onchange="applyFilters()">
+    <option value="">全部</option>
+  </select>
+  <label>交易所:</label>
+  <select id="filterExchange" onchange="applyFilters()">
+    <option value="">全部</option>
+    <option value="DCE">大商所</option>
+    <option value="CZCE">郑商所</option>
+    <option value="SHFE">上期所</option>
+    <option value="INE">上期能源</option>
+    <option value="CFFEX">中金所</option>
+  </select>
+  <label>偏度类型:</label>
+  <select id="filterSector" onchange="applyFilters()">
+    <option value="">全部</option>
+    <option value="agri">农产品型</option>
+    <option value="indust">工业品型</option>
+    <option value="chem">化工品型</option>
+    <option value="index">股指型</option>
+  </select>
+  <label>流动性:</label>
+  <select id="filterLiquidity" onchange="applyFilters()">
+    <option value="">全部</option>
+    <option value="A">A级</option>
+    <option value="A|B">A-B级</option>
+    <option value="A|B|C">A-C级</option>
+  </select>
+  <label>Skew阈值≥</label>
+  <input type="range" id="filterSkewMin" min="0" max="20" value="0" step="0.5" oninput="applyFilters()">
+  <span id="skewMinVal" style="font-size:12px;min-width:30px;">0%</span>
+  <label>Z值≥</label>
+  <input type="range" id="filterZMin" min="0" max="3" value="0" step="0.1" oninput="applyFilters()">
+  <span id="zMinVal" style="font-size:12px;min-width:24px;">0</span>
+  <button class="btn btn-sm" onclick="resetFilters()">重置筛选</button>
+</div>
+
+<!-- ── 主表格 ── -->
+<div class="table-container" id="tableContainer">
+  <div class="loading-overlay" id="tableLoading">
+    <div class="loading-spinner"></div>
+    <span>正在加载数据...</span>
+  </div>
+  <table class="main-table" id="mainTable" style="display:none;">
+    <thead>
+      <tr>
+        <th data-sort="display_name">品种</th>
+        <th data-sort="sector">偏度类型</th>
+        <th data-sort="futures_code">近月合约</th>
+        <th data-sort="underlying_price">标的最新价</th>
+        <th data-sort="call_iv_25d">25Δ认购IV</th>
+        <th data-sort="put_iv_25d">25Δ认沽IV</th>
+        <th data-sort="iv_skew">IV_Skew</th>
+        <th data-sort="z_score">Z值</th>
+        <th data-sort="iv_percentile">IV分位</th>
+        <th data-sort="skew_slope">偏度斜率</th>
+        <th data-sort="dte">到期天</th>
+        <th>套利方向</th>
+        <th>辅助信号</th>
+        <th data-sort="liquidity">流动性</th>
+        <th data-sort="recommend">推荐等级</th>
+      </tr>
+    </thead>
+    <tbody id="tableBody"></tbody>
+  </table>
+</div>
+
+<!-- ── 底部 ── -->
+<div class="footer-bar">
+  本工具数据仅供策略学习参考，不构成任何投资建议；期权交易属于高风险业务，所有交易盈亏由投资者自行承担。
+  数据基于 TqSdk 免费版，存在约 15 分钟延时。CZCE/DCE品种支持组合保证金，SHFE/INE部分支持。
+</div>
+
+<!-- ── 侧滑面板 Overlay ── -->
+<div class="overlay" id="overlay" onclick="closePanel()"></div>
+<div class="slide-panel" id="slidePanel">
+  <div class="panel-header">
+    <h3 id="panelTitle">品种深度分析</h3>
+    <button class="panel-close" onclick="closePanel()">✕</button>
+  </div>
+  <div class="panel-body" id="panelBody">
+    <div class="loading-overlay"><div class="loading-spinner"></div><span>加载中...</span></div>
+  </div>
+</div>
+
+<script>
+// ── 全局状态 ──
+let allProducts = [];
+let currentSort = { field: 'iv_skew', asc: false };
+let soundEnabled = true;
+let currentProduct = null;
+let currentDetail = null;
+let chartInstances = {};
+
+// ── 初始化 ──
+document.addEventListener('DOMContentLoaded', () => {
+  updateClock();
+  setInterval(updateClock, 10000);
+  loadWatchlist();
+  fetchOverview();
+  setInterval(fetchOverview, 30000);  // 30秒轮询
+});
+
+function updateClock() {
+  document.getElementById('currentTime').textContent =
+    new Date().toLocaleString('zh-CN', { hour12: false });
+}
+
+// ── 数据获取 (GitHub Pages 静态版: 从 data.json 加载) ──
+let __dataLoaded = false;
+async function ensureData() {
+  if (__dataLoaded && window.SKEW_DATA) return;
+  const resp = await fetch('./data.json');
+  if (!resp.ok) throw new Error('data.json 加载失败: ' + resp.status);
+  window.SKEW_DATA = await resp.json();
+  __dataLoaded = true;
+}
+async function fetchOverview() {
+  try {
+    await ensureData();
+    const status = window.SKEW_DATA.status;
+    updateStatusBar(status);
+    const data = window.SKEW_DATA.overview;
+    allProducts = data.products || [];
+    populateFilterOptions();
+    applyFilters();
+    updateSignalAlert(data.signal_count || 0);
+    document.getElementById('tableLoading').style.display = 'none';
+    document.getElementById('mainTable').style.display = '';
+  } catch(e) {
+    console.error('获取数据失败:', e);
+    document.getElementById('tableLoading').innerHTML =
+      '<span style="color:#E74C3C;">数据加载失败，请确认后端已启动<br>' + e.message + '</span>';
+  }
+}
+
+// ── 状态栏更新 ──
+function updateStatusBar(data) {
+  const dot = document.getElementById('statusDot');
+  const text = document.getElementById('statusText');
+  dot.className = 'dot';
+  if (data.connected || data.status === 'ready') {
+    dot.classList.add('green'); text.textContent = '就绪';
+  } else if (data.status === 'refreshing' || data.status === 'initializing') {
+    dot.classList.add('yellow'); text.textContent = data.status_message || '刷新中...';
+  } else {
+    dot.classList.add('red'); text.textContent = data.status_message || '异常';
+  }
+  if (data.last_refresh) {
+    const dt = new Date(data.last_refresh);
+    document.getElementById('lastRefresh').textContent =
+      dt.toLocaleTimeString('zh-CN', { hour12: false });
+  }
+  document.getElementById('totalProducts').textContent = data.total_products || allProducts.length;
+  document.getElementById('signalCount').textContent = data.signal_count || 0;
+  document.getElementById('signalCount').className =
+    'signal-count' + ((data.signal_count || 0) > 0 ? ' active' : '');
+}
+
+function updateSignalAlert(count) {
+  const prevCount = parseInt(document.getElementById('signalCount').dataset.prevCount || '0');
+  if (count > 0 && soundEnabled) {
+    document.getElementById('signalCount').classList.add('active');
+    // 信号新增时播放提示音
+    if (count > prevCount) playBeep();
+  } else {
+    document.getElementById('signalCount').classList.remove('active');
+  }
+  document.getElementById('signalCount').dataset.prevCount = count;
+}
+
+// Web Audio API 提示音（无需外部音频文件）
+let audioCtx = null;
+function playBeep() {
+  try {
+    if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    osc.connect(gain);
+    gain.connect(audioCtx.destination);
+    osc.type = 'sine';
+    osc.frequency.value = 880;
+    gain.gain.value = 0.3;
+    osc.start();
+    osc.stop(audioCtx.currentTime + 0.15);
+    // 第二声
+    setTimeout(() => {
+      const osc2 = audioCtx.createOscillator();
+      const gain2 = audioCtx.createGain();
+      osc2.connect(gain2);
+      gain2.connect(audioCtx.destination);
+      osc2.type = 'sine';
+      osc2.frequency.value = 1100;
+      gain2.gain.value = 0.3;
+      osc2.start();
+      osc2.stop(audioCtx.currentTime + 0.2);
+    }, 200);
+  } catch(e) { /* 浏览器不支持Web Audio，静默忽略 */ }
+}
+
+// ── 筛选选项 ──
+function populateFilterOptions() {
+  const sel = document.getElementById('filterProduct');
+  const current = sel.value;
+  sel.innerHTML = '<option value="">全部</option>';
+  const names = [...new Set(allProducts.map(p => p.product))].sort();
+  names.forEach(n => {
+    const p = allProducts.find(x => x.product === n);
+    sel.innerHTML += `<option value="${n}">${p.display_name||n} (${n})</option>`;
+  });
+  sel.value = current;
+}
+
+// ── 筛选与渲染 ──
+let filteredProducts = [];
+
+function applyFilters() {
+  const fp = document.getElementById('filterProduct').value;
+  const fe = document.getElementById('filterExchange').value;
+  const fs = document.getElementById('filterSector').value;
+  const fl = document.getElementById('filterLiquidity').value;
+  const sm = parseFloat(document.getElementById('filterSkewMin').value);
+  const zm = parseFloat(document.getElementById('filterZMin').value);
+
+  document.getElementById('skewMinVal').textContent = sm + '%';
+  document.getElementById('zMinVal').textContent = zm;
+
+  filteredProducts = allProducts.filter(p => {
+    if (p.status !== 'ready') return false;
+    if (fp && p.product !== fp) return false;
+    if (fe && p.exchange !== fe) return false;
+    if (fs && (p.sector || '') !== fs && (p.classification || '') !== fs) return false;
+    if (fl) {
+      const allowed = fl.split('|');
+      if (!allowed.includes(p.liquidity)) return false;
+    }
+    if (Math.abs(p.iv_skew || 0) < sm) return false;
+    if (Math.abs(p.z_score || 0) < zm) return false;
+    return true;
+  });
+
+  // 排序
+  const sf = currentSort.field;
+  filteredProducts.sort((a, b) => {
+    let va = a[sf], vb = b[sf];
+    if (sf === 'iv_skew' || sf === 'z_score' || sf === 'skew_slope') {
+      va = Math.abs(va || 0); vb = Math.abs(vb || 0);
+    }
+    if (typeof va === 'string') va = va.toLowerCase();
+    if (typeof vb === 'string') vb = vb.toLowerCase();
+    if (va < vb) return currentSort.asc ? -1 : 1;
+    if (va > vb) return currentSort.asc ? 1 : -1;
+    return 0;
+  });
+
+  renderTable();
+}
+
+function resetFilters() {
+  document.getElementById('filterProduct').value = '';
+  document.getElementById('filterExchange').value = '';
+  document.getElementById('filterSector').value = '';
+  document.getElementById('filterLiquidity').value = '';
+  document.getElementById('filterSkewMin').value = 0;
+  document.getElementById('filterZMin').value = 0;
+  document.getElementById('skewMinVal').textContent = '0%';
+  document.getElementById('zMinVal').textContent = '0';
+  applyFilters();
+}
+
+function sortTable(field) {
+  if (currentSort.field === field) {
+    currentSort.asc = !currentSort.asc;
+  } else {
+    currentSort.field = field;
+    currentSort.asc = field === 'iv_skew' || field === 'z_score' ? false : true;
+  }
+  applyFilters();
+}
+
+// ── 表格渲染 ──
+function renderTable() {
+  const tbody = document.getElementById('tableBody');
+  tbody.innerHTML = '';
+
+  filteredProducts.forEach(p => {
+    const skew = p.iv_skew || 0;
+    const absSkew = Math.abs(skew);
+    const z = p.z_score || 0;
+    const absZ = Math.abs(z);
+
+    let rowClass = 'row-active';
+    if (absSkew >= 8) rowClass += skew > 0 ? ' row-red' : ' row-green';
+    if (p.liquidity === 'D') rowClass = 'row-gray';
+    if (p.status !== 'ready') rowClass = 'row-gray';
+
+    // 偏度类型标签
+    const cls = p.classification || p.sector || '';
+    const clsLabel = {agri:'农产品型',indust:'工业品型',chem:'化工品型',index:'股指型'}[cls] || cls;
+
+    // 到期标签
+    let dteTag = '';
+    if (p.dte_label === '最佳窗口') dteTag = `<span class="tag tag-green">${p.dte}d</span>`;
+    else if (p.dte_label === '临近到期') dteTag = `<span class="tag tag-red">${p.dte}d</span>`;
+    else if (p.dte_label === '远月合约') dteTag = `<span class="tag tag-gray">${p.dte}d</span>`;
+    else dteTag = `${p.dte || '?'}d`;
+
+    // 方向
+    let dirHtml = '';
+    if (p.direction === 'short_skew') dirHtml = '<span class="val-red">🔴卖Put买Call</span>';
+    else if (p.direction === 'long_skew') dirHtml = '<span class="val-green">🟢卖Call买Put</span>';
+    else dirHtml = '<span class="val-gray">—</span>';
+
+    // 辅助信号
+    let auxHtml = '';
+    if (p.aux_signals && p.aux_signals.length > 0) {
+      auxHtml = p.aux_signals.map(s => `<span class="tag tag-blue">${s}</span>`).join(' ');
+    }
+
+    // 推荐等级
+    let recHtml = `<span class="tag-recommend">${p.recommend||'★☆☆'}</span>`;
+
+    // 流动性标签
+    const liqColors = {A:'tag-green',B:'',C:'tag-yellow',D:'tag-red'};
+    const liqTag = `<span class="tag ${liqColors[p.liquidity]||''}">${p.liquidity||'?'}</span>`;
+
+    // Z值
+    let zHtml = '';
+    if (p.z_status === 'ready') {
+      zHtml = `<span class="${absZ >= 1.5 ? 'val-bold' : ''}">${z.toFixed(2)}</span>`;
+    } else {
+      zHtml = `<span class="val-gray" title="${p.z_status}">${p.z_status||'N/A'}</span>`;
+    }
+
+    tbody.innerHTML += `
+      <tr class="${rowClass}" onclick="openPanel('${p.product}')">
+        <td><strong>${p.display_name||p.product}</strong> <span class="val-gray">${p.product}</span></td>
+        <td><span class="tag">${clsLabel}</span></td>
+        <td>${p.futures_code||''}</td>
+        <td class="val-bold">${(p.underlying_price||0).toFixed(0)}</td>
+        <td class="val-red">${(p.call_iv_25d||0).toFixed(1)}%</td>
+        <td class="val-green">${(p.put_iv_25d||0).toFixed(1)}%</td>
+        <td class="val-bold ${skew>0?'val-red':'val-green'}">${skew>0?'+':''}${skew.toFixed(2)}%</td>
+        <td>${zHtml}</td>
+        <td>${p.iv_percentile||50}%</td>
+        <td class="${Math.abs(p.skew_slope||0)>3?'val-yellow':''}">${(p.skew_slope||0).toFixed(1)}%/档</td>
+        <td>${dteTag}</td>
+        <td>${dirHtml}</td>
+        <td>${auxHtml}</td>
+        <td>${liqTag}</td>
+        <td>${recHtml}</td>
+      </tr>`;
+  });
+
+  if (filteredProducts.length === 0 && allProducts.length > 0) {
+    tbody.innerHTML = '<tr><td colspan="15" style="text-align:center;padding:20px;color:#BDC3C7;">无匹配结果</td></tr>';
+  }
+}
+
+// ── 表头排序 ──
+document.addEventListener('click', (e) => {
+  const th = e.target.closest('th[data-sort]');
+  if (th) sortTable(th.dataset.sort);
+});
+
+// ── 侧滑面板 ──
+async function openPanel(product) {
+  currentProduct = product;
+  document.getElementById('overlay').classList.add('open');
+  document.getElementById('slidePanel').classList.add('open');
+  document.getElementById('panelBody').innerHTML =
+    '<div class="loading-overlay"><div class="loading-spinner"></div><span>加载中...</span></div>';
+
+  try {
+    await ensureData();
+    currentDetail = window.SKEW_DATA.details[product];
+    if (!currentDetail) throw new Error('该品种暂无数据');
+    renderDetailPanel(currentDetail);
+  } catch(e) {
+    document.getElementById('panelBody').innerHTML =
+      `<p style="color:#E74C3C;">加载失败: ${e.message}</p>`;
+  }
+}
+
+function closePanel() {
+  document.getElementById('overlay').classList.remove('open');
+  document.getElementById('slidePanel').classList.remove('open');
+  Object.values(chartInstances).forEach(c => c.dispose());
+  chartInstances = {};
+}
+
+function renderDetailPanel(detail) {
+  const d = detail.skew_data || {};
+  const chain = detail.option_chain || {};
+  const hist = detail.history || [];
+  const cls = detail.classification || d.sector || '';
+  const clsLabel = {agri:'农产品型',indust:'工业品型',chem:'化工品型',index:'股指型'}[cls] || cls;
+
+  const skew = d.iv_skew || 0;
+  const z = d.z_score || 0;
+  const absSkew = Math.abs(skew);
+  const absZ = Math.abs(z);
+
+  let html = '';
+
+  // ── 指标卡 ──
+  html += '<div class="metric-cards">';
+  html += cardHTML('IV_Skew', `${skew>0?'+':''}${skew.toFixed(2)}%`,
+    `历史均值: ${d.avg_iv||0}%`, absSkew >= 8 ? (skew > 0 ? 'blink-red' : 'blink-green') : '',
+    skew > 0 ? 'val-red' : 'val-green');
+  html += cardHTML('Z值', z ? z.toFixed(2) : (d.z_status||'N/A'),
+    d.z_status === 'ready' ? `σ: ${(hist.length>0?calcStd(hist):0).toFixed(2)}` : '', absZ >= 1.5 ? 'blink-red' : '');
+  html += cardHTML('30日IV分位', `${d.iv_percentile||50}%`,
+    '', (d.iv_percentile >= 90 || d.iv_percentile <= 10) ? 'blink-red' : '');
+  // 本地期权数据库真实HV基线 (白总库, AKShare期货日线, 不参与偏度信号)
+  const hvPct = d.underlying_hv_percentile;
+  html += cardHTML('标的HV·本地库', d.underlying_hv!=null ? `${d.underlying_hv.toFixed(1)}%` : '—',
+    hvPct!=null ? `近一年分位 ${hvPct}%` : '本地库无覆盖',
+    (hvPct!=null && (hvPct>=80 || hvPct<=20)) ? 'blink-red' : '', '');
+  // 标的价格区间 (实时TqSdk累积, 真实数据)
+  const uphArr = (detail.underlying_price_history && detail.underlying_price_history[d.product]) || [];
+  let upVal = d.underlying_price!=null ? d.underlying_price.toFixed(1) : '—';
+  let upSub = '实时累积中...';
+  if (uphArr.length >= 2) {
+    const ps = uphArr.map(x => x[1]);
+    const mn = Math.min(...ps), mx = Math.max(...ps), avg = ps.reduce((a,b)=>a+b,0)/ps.length;
+    upSub = `区间[${mn.toFixed(0)}, ${mx.toFixed(0)}] 均值${avg.toFixed(0)} · ${uphArr.length}点`;
+  } else if (uphArr.length === 1) {
+    upSub = '首点 · 累积中';
+  }
+  html += cardHTML('标的价格区间', upVal, upSub, '', '');
+  html += cardHTML('Skew比率', `${(d.skew_ratio||0).toFixed(1)}%`, '偏度/平均IV', '', '');
+  html += cardHTML('到期天数', `${d.dte||'?'}天`,
+    d.dte_label||'', d.dte < 10 ? 'blink-red' : '',
+    d.dte_color === 'green' ? 'val-green' : d.dte_color === 'red' ? 'val-red' : '');
+  html += cardHTML('组合净Δ', '—', '需选取具体行权价', '', '');
+  html += cardHTML('偏度类型', clsLabel, d.signal ? '异常' : '正常', '', '');
+  html += '</div>';
+
+  // ── 期权链 + 图表 ──
+  html += '<div class="chain-chart-row">';
+  html += renderOptionChain(chain, d, clsLabel);
+  html += '<div class="chart-area">';
+  html += '<div class="chart-tabs">';
+  html += '<button class="chart-tab active" onclick="switchChartTab(\'pnl\')">策略盈亏图</button>';
+  html += '<button class="chart-tab" onclick="switchChartTab(\'smile\')">波动率微笑</button>';
+  html += '<button class="chart-tab" onclick="switchChartTab(\'skewterm\')">偏度期限结构</button>';
+  html += '<button class="chart-tab" onclick="switchChartTab(\'hvenv\')">波动率环境</button>';
+  html += '</div>';
+  html += '<div id="lotSelector" class="lot-selector">';
+  [1,2,5,10].forEach(n => {
+    html += `<button class="lot-btn${n===1?' active':''}" onclick="switchLots(${n})">${n}x</button>`;
+  });
+  html += '</div>';
+  html += '<div class="chart-container" id="chartPnl"></div>';
+  html += '<div class="chart-container" id="chartSmile" style="display:none;"></div>';
+  html += '<div class="chart-container" id="chartSkewTerm" style="display:none;"></div>';
+  html += '<div class="chart-container" id="chartHvEnv" style="display:none;"></div>';
+  html += '</div></div>';
+
+  // ── 策略详情 (组合方向根据 direction 动态渲染) ──
+  html += '<div class="detail-section"><h4>组合合约明细</h4>';
+  html += '<table class="detail-table"><thead><tr><th>合约代码</th><th>方向</th><th>IV</th><th>Delta</th><th>成交量</th><th>流动性</th></tr></thead><tbody>';
+  // 方向判定: short_skew(正偏度/Put贵)→卖Put买Call; long_skew(负偏度/Call贵)→卖Call买Put; 空值→无信号
+  const hasDir = d.direction === 'short_skew' || d.direction === 'long_skew';
+  const callDir = (d.direction === 'short_skew') ? { text: '买入', cls: 'val-green' }
+               : (d.direction === 'long_skew')  ? { text: '卖出', cls: 'val-red' }
+               : { text: '—', cls: 'val-gray' };
+  const putDir  = (d.direction === 'short_skew') ? { text: '卖出', cls: 'val-red' }
+               : (d.direction === 'long_skew')  ? { text: '买入', cls: 'val-green' }
+               : { text: '—', cls: 'val-gray' };
+  if (chain.benchmark_call) {
+    const c = chain.benchmark_call;
+    html += `<tr><td>${c.symbol||''}</td><td class="${callDir.cls}">${callDir.text}</td><td>${(c.iv||0).toFixed(1)}%</td><td>${(c.delta||0).toFixed(4)}</td><td>${c.volume||0}</td><td>${c.liquidity||''}</td></tr>`;
+  }
+  if (chain.benchmark_put) {
+    const p = chain.benchmark_put;
+    html += `<tr><td>${p.symbol||''}</td><td class="${putDir.cls}">${putDir.text}</td><td>${(p.iv||0).toFixed(1)}%</td><td>${(p.delta||0).toFixed(4)}</td><td>${p.volume||0}</td><td>${p.liquidity||''}</td></tr>`;
+  }
+  html += '</tbody></table></div>';
+
+  // ── 操作按钮 ──
+  html += '<div style="display:flex;gap:8px;margin-top:12px;">';
+  html += `<button class="btn btn-sm" onclick="toggleWatchlist('${d.product}')" id="wlBtn">⭐ 加入自选</button>`;
+  html += `<button class="btn btn-sm" onclick="exportCSV('${d.product}')">📥 导出CSV</button>`;
+  html += '</div>';
+
+  document.getElementById('panelBody').innerHTML = html;
+
+  // 渲染图表
+  setTimeout(() => {
+    renderPnlChart(d, chain, hist);
+    renderSmileChart(chain);
+    renderSkewTermChart(d);
+    updateWatchlistBtn(d.product);
+  }, 200);
+}
+
+function cardHTML(label, value, sub, extraClass, valueClass) {
+  return `<div class="metric-card ${extraClass}">
+    <div class="label">${label}</div>
+    <div class="value ${valueClass}">${value}</div>
+    <div class="sub">${sub}</div>
+  </div>`;
+}
+
+function calcStd(hist) {
+  const vals = hist.map(h => h.skew || 0);
+  if (vals.length < 2) return 0;
+  const mean = vals.reduce((a,b)=>a+b,0)/vals.length;
+  return Math.sqrt(vals.reduce((s,v)=>s+(v-mean)**2,0)/vals.length);
+}
+
+// ── 期权链渲染 ──
+function renderOptionChain(chain, d, clsLabel) {
+  const calls = chain.calls || [];
+  const puts = chain.puts || [];
+  const bCall = chain.benchmark_call || {};
+  const bPut = chain.benchmark_put || {};
+
+  // 合并所有行权价
+  const strikes = new Set();
+  calls.forEach(c => strikes.add(c.strike));
+  puts.forEach(p => strikes.add(p.strike));
+  const sortedStrikes = [...strikes].sort((a,b) => b-a);
+
+  let html = '<div class="option-chain"><table>';
+  html += '<thead><tr><th colspan="5">看涨期权</th><th>行权价</th><th colspan="5">认沽期权</th></tr>';
+  html += '<tr><th>买价</th><th>卖价</th><th>IV</th><th>Δ</th><th>量</th><th></th><th>量</th><th>Δ</th><th>IV</th><th>卖价</th><th>买价</th></tr></thead><tbody>';
+
+  sortedStrikes.forEach(strike => {
+    const c = calls.find(x => x.strike === strike);
+    const p = puts.find(x => x.strike === strike);
+    const isBenchmark = (c && c.symbol === bCall.symbol) || (p && p.symbol === bPut.symbol);
+    const rowClass = isBenchmark ? 'row-benchmark' : '';
+
+    html += `<tr class="${rowClass}">`;
+    if (c) {
+      html += `<td>${(c.bid||0).toFixed(1)}</td><td>${(c.ask||0).toFixed(1)}</td>`;
+      html += `<td class="val-red">${(c.iv||0).toFixed(1)}%</td>`;
+      html += `<td>${(c.delta||0).toFixed(2)}</td><td>${(c.volume||0)}</td>`;
+    } else {
+      html += '<td colspan="5" class="val-gray">—</td>';
+    }
+    html += `<td class="strike-col">${strike}${isBenchmark?'<span class="tag-benchmark">偏度基准</span>':''}</td>`;
+    if (p) {
+      html += `<td>${(p.volume||0)}</td><td>${(p.delta||0).toFixed(2)}</td>`;
+      html += `<td class="val-green">${(p.iv||0).toFixed(1)}%</td>`;
+      html += `<td>${(p.ask||0).toFixed(1)}</td><td>${(p.bid||0).toFixed(1)}</td>`;
+    } else {
+      html += '<td colspan="5" class="val-gray">—</td>';
+    }
+    html += '</tr>';
+  });
+
+  html += '</tbody></table></div>';
+  return html;
+}
+
+// ── ECharts 图表 ──
+let currentLots = 1;
+
+function renderPnlChart(d, chain, hist) {
+  const dom = document.getElementById('chartPnl');
+  if (!dom) return;
+  if (chartInstances.pnl) chartInstances.pnl.dispose();
+
+  const price = d.underlying_price || 3000;
+  const pRange = price * 0.2;
+  const xData = [];
+  const pnlData = [];
+  // 简化盈亏计算: 以25Delta组合为例
+  const spread = Math.abs(d.iv_skew || 2) * 10;  // 粗略估计权利金差
+
+  for (let i = -20; i <= 20; i++) {
+    const p = price + pRange * i / 20;
+    xData.push(p.toFixed(0));
+    // 简化: 到期时盈亏 = (标的变化产生的Delta影响) + 权利金净收入
+    const deltaPnl = -Math.abs(p - price) * 0.25 * currentLots;
+    const premium = spread * currentLots;
+    pnlData.push((deltaPnl + premium).toFixed(0));
+  }
+
+  const option = {
+    tooltip: { trigger: 'axis' },
+    grid: { left: 50, right: 20, top: 20, bottom: 40 },
+    xAxis: { type: 'category', data: xData, name: '标的价格',
+      axisLine: { lineStyle: { color: '#E0E0E0' } } },
+    yAxis: { type: 'value', name: '盈亏(元)',
+      axisLine: { lineStyle: { color: '#E0E0E0' } },
+      splitLine: { lineStyle: { color: '#F0F0F0' } } },
+    series: [{
+      type: 'line', data: pnlData, smooth: true,
+      lineStyle: { color: '#3498DB', width: 2 },
+      areaStyle: { color: 'rgba(52,152,219,0.1)' },
+      markLine: {
+        silent: true,
+        data: [
+          { xAxis: price.toFixed(0), label: { formatter: `当前价\n${price.toFixed(0)}` },
+            lineStyle: { color: '#E74C3C', type: 'dashed' } },
+          { yAxis: 0, label: { formatter: '盈亏平衡' }, lineStyle: { color: '#7F8C8D', type: 'dashed' } }
+        ]
+      }
+    }]
+  };
+  chartInstances.pnl = echarts.init(dom);
+  chartInstances.pnl.setOption(option);
+}
+
+function renderSmileChart(chain) {
+  const dom = document.getElementById('chartSmile');
+  if (!dom) return;
+  if (chartInstances.smile) chartInstances.smile.dispose();
+
+  const calls = chain.calls || [];
+  const puts = chain.puts || [];
+
+  const callData = calls.map(c => [c.strike, c.iv]).sort((a,b) => a[0]-b[0]);
+  const putData = puts.map(p => [p.strike, p.iv]).sort((a,b) => a[0]-b[0]);
+
+  const bCall = chain.benchmark_call || {};
+  const bPut = chain.benchmark_put || {};
+
+  const option = {
+    tooltip: { trigger: 'axis', formatter: p => {
+      return p.map(d => `${d.seriesName}: 行权价${d.data[0]} IV=${d.data[1]}%`).join('<br>');
+    }},
+    grid: { left: 50, right: 20, top: 20, bottom: 40 },
+    xAxis: { type: 'value', name: '行权价',
+      axisLine: { lineStyle: { color: '#E0E0E0' } } },
+    yAxis: { type: 'value', name: 'IV(%)',
+      axisLine: { lineStyle: { color: '#E0E0E0' } },
+      splitLine: { lineStyle: { color: '#F0F0F0' } } },
+    series: [
+      {
+        name: '认购IV', type: 'scatter', data: callData,
+        symbolSize: d => (d[0]===bCall.strike ? 14 : 7),
+        itemStyle: { color: '#E74C3C' },
+      },
+      {
+        name: '认沽IV', type: 'scatter', data: putData,
+        symbolSize: d => (d[0]===bPut.strike ? 14 : 7),
+        itemStyle: { color: '#27AE60' },
+      }
+    ]
+  };
+  chartInstances.smile = echarts.init(dom);
+  chartInstances.smile.setOption(option);
+}
+
+function renderSkewTermChart(d) {
+  const dom = document.getElementById('chartSkewTerm');
+  if (!dom) return;
+  if (chartInstances.skewterm) chartInstances.skewterm.dispose();
+
+  const multi = d.multi_skew || [];
+  const xData = multi.map(m => `OTM${m.level}`);
+  const yData = multi.map(m => m.skew);
+
+  const option = {
+    tooltip: { trigger: 'axis', formatter: p => {
+      const idx = p[0].dataIndex;
+      const m = multi[idx];
+      return `OTM${m.level}: Skew=${m.skew}%<br>Call IV=${m.call_iv}% Put IV=${m.put_iv}%<br>成交量权重=${m.volume_weight}`;
+    }},
+    grid: { left: 50, right: 20, top: 20, bottom: 40 },
+    xAxis: { type: 'category', data: xData,
+      axisLine: { lineStyle: { color: '#E0E0E0' } } },
+    yAxis: { type: 'value', name: 'Skew(%)',
+      axisLine: { lineStyle: { color: '#E0E0E0' } },
+      splitLine: { lineStyle: { color: '#F0F0F0' } } },
+    series: [{
+      type: 'bar', data: yData.map(v => ({
+        value: v,
+        itemStyle: { color: v >= 0 ? '#FDEDEC' : '#E8F8F5', borderColor: v >= 0 ? '#E74C3C' : '#27AE60' }
+      })),
+      markLine: {
+        silent: true,
+        data: [
+          { yAxis: 8, label: { formatter: '+8%' }, lineStyle: { color: '#E74C3C', type: 'dashed' } },
+          { yAxis: -8, label: { formatter: '-8%' }, lineStyle: { color: '#27AE60', type: 'dashed' } }
+        ]
+      }
+    }]
+  };
+  chartInstances.skewterm = echarts.init(dom);
+  chartInstances.skewterm.setOption(option);
+}
+
+function renderHvEnvChart(d) {
+  const dom = document.getElementById('chartHvEnv');
+  if (!dom) return;
+  const series = d.underlying_hv_series || [];
+  if (!series.length) {
+    dom.innerHTML = '<div style="padding:24px;color:#999;font-size:13px;">本地期权库无该品种HV历史（真实波动率基线缺失）</div>';
+    return;
+  }
+  const dates = series.map(s => s.date);
+  const hvs = series.map(s => s.hv);
+  const mean = d.underlying_hv_mean;
+  const last = hvs[hvs.length - 1];
+  const option = {
+    grid: { left: 50, right: 22, top: 38, bottom: 46 },
+    tooltip: { trigger: 'axis', valueFormatter: v => (v==null ? '-' : v + '%') },
+    title: { text: `${d.display_name||d.product} · 标的HV波动率环境`, left: 'center', textStyle: { fontSize: 13, color: '#333', fontWeight: 'normal' } },
+    xAxis: { type: 'category', data: dates, boundaryGap: false, axisLabel: { fontSize: 10, color: '#888', rotate: 30 } },
+    yAxis: { type: 'value', name: 'HV %', scale: true, nameTextStyle: { fontSize: 10, color: '#888' }, axisLabel: { fontSize: 10, color: '#888' }, splitLine: { lineStyle: { color: '#eee' } } },
+    series: [{
+      name: 'HV', type: 'line', data: hvs, smooth: true, showSymbol: false,
+      lineStyle: { color: '#2C7BE5', width: 2 },
+      areaStyle: { color: 'rgba(44,123,229,0.08)' },
+      markLine: mean != null ? {
+        silent: true, symbol: 'none',
+        data: [{ yAxis: mean, label: { formatter: `均值 ${mean}%`, color: '#E67E22', fontSize: 10 }, lineStyle: { color: '#E67E22', type: 'dashed' } }]
+      } : undefined,
+      markPoint: {
+        symbolSize: 8, itemStyle: { color: '#E74C3C' },
+        data: [{ name: '最新', coord: [dates[dates.length - 1], last], value: last }]
+      }
+    }]
+  };
+  chartInstances.hvenv = echarts.init(dom);
+  chartInstances.hvenv.setOption(option);
+}
+
+function switchChartTab(tab) {
+  document.querySelectorAll('.chart-tab').forEach(t => t.classList.remove('active'));
+  event.target.classList.add('active');
+  document.getElementById('chartPnl').style.display = tab === 'pnl' ? '' : 'none';
+  document.getElementById('chartSmile').style.display = tab === 'smile' ? '' : 'none';
+  document.getElementById('chartSkewTerm').style.display = tab === 'skewterm' ? '' : 'none';
+  document.getElementById('chartHvEnv').style.display = tab === 'hvenv' ? '' : 'none';
+  document.getElementById('lotSelector').style.display = tab === 'pnl' ? '' : 'none';
+
+  if (tab === 'smile') renderSmileChart(currentDetail?.option_chain || {});
+  if (tab === 'skewterm') renderSkewTermChart(currentDetail?.skew_data || {});
+  if (tab === 'pnl') renderPnlChart(currentDetail?.skew_data || {}, currentDetail?.option_chain || {}, currentDetail?.history || []);
+  if (tab === 'hvenv') renderHvEnvChart(currentDetail?.skew_data || {});
+}
+
+function switchLots(n) {
+  currentLots = n;
+  document.querySelectorAll('.lot-btn').forEach(b => b.classList.remove('active'));
+  event.target.classList.add('active');
+  renderPnlChart(currentDetail?.skew_data || {}, currentDetail?.option_chain || {}, currentDetail?.history || []);
+}
+
+// ── 手动刷新 ──
+async function manualRefresh() {
+  document.getElementById('statusText').textContent = '静态版数据每日自动更新';
+}
+
+// ── 声音 ──
+function toggleSound() {
+  soundEnabled = !soundEnabled;
+  document.getElementById('soundBtn').textContent = soundEnabled ? '🔊 声音提醒' : '🔇 已静音';
+}
+
+// ── 自选列表 ──
+function loadWatchlist() {
+  try {
+    return JSON.parse(localStorage.getItem('skew_watchlist') || '[]');
+  } catch(e) { return []; }
+}
+
+function saveWatchlist(list) {
+  localStorage.setItem('skew_watchlist', JSON.stringify(list));
+}
+
+function toggleWatchlist(product) {
+  let wl = loadWatchlist();
+  const idx = wl.indexOf(product);
+  if (idx >= 0) {
+    wl.splice(idx, 1);
+  } else {
+    wl.push(product);
+  }
+  saveWatchlist(wl);
+  updateWatchlistBtn(product);
+}
+
+function updateWatchlistBtn(product) {
+  const btn = document.getElementById('wlBtn');
+  if (!btn) return;
+  const wl = loadWatchlist();
+  if (wl.includes(product)) {
+    btn.textContent = '⭐ 取消自选';
+    btn.style.background = '#FFF3CD';
+  } else {
+    btn.textContent = '☆ 加入自选';
+    btn.style.background = '';
+  }
+}
+
+// ── CSV导出 ──
+function exportCSV(product) {
+  if (!currentDetail) return;
+  const d = currentDetail.skew_data || {};
+  const chain = currentDetail.option_chain || {};
+
+  let csv = '品种,偏度类型,近月合约,标的最新价,25Δ认购IV,25Δ认沽IV,IV_Skew,Z值,IV分位,偏度斜率,到期天,套利方向,推荐等级,流动性\n';
+  csv += [
+    d.product, d.sector||'', d.futures_code, d.underlying_price,
+    d.call_iv_25d, d.put_iv_25d, d.iv_skew, d.z_score,
+    d.iv_percentile, d.skew_slope, d.dte,
+    d.direction||'', d.recommend||'', d.liquidity||''
+  ].join(',') + '\n\n';
+
+  csv += '期权链\n';
+  csv += '行权价,方向,IV,Delta,成交量,流动性\n';
+  (chain.calls||[]).forEach(c => {
+    csv += `${c.strike},CALL,${c.iv},${c.delta},${c.volume},${c.liquidity}\n`;
+  });
+  (chain.puts||[]).forEach(p => {
+    csv += `${p.strike},PUT,${p.iv},${p.delta},${p.volume},${p.liquidity}\n`;
+  });
+
+  const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `${product}_skew_${new Date().toISOString().slice(0,10)}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+// ── 窗口resize ──
+window.addEventListener('resize', () => {
+  Object.values(chartInstances).forEach(c => c.resize());
+});
+</script>
+</body>
+</html>
